@@ -5,4 +5,4 @@ run: build
 	/github/go-blockchain/bin/go-blockchain
 
 test:
-	go test -v ./...
+	gotestsum --format=short-verbose
