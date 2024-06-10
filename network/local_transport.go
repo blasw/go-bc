@@ -6,6 +6,7 @@ import (
 	"sync"
 )
 
+// LocalTransport implements Transport interface and is being used as a temporary local solution
 type LocalTransport struct {
 	addr      NetAddr
 	peers     map[NetAddr]*LocalTransport
@@ -13,6 +14,7 @@ type LocalTransport struct {
 	consumeCh chan RPC
 }
 
+// NewLocalTransport returns a new instance of LocalTransport
 func NewLocalTransport(addr NetAddr) Transport {
 	return &LocalTransport{
 		addr:      addr,
@@ -21,10 +23,12 @@ func NewLocalTransport(addr NetAddr) Transport {
 	}
 }
 
+// Consume returns a channel that can be used to consume RPC messages
 func (t *LocalTransport) Consume() <-chan RPC {
 	return t.consumeCh
 }
 
+// Connect adds a peer to the list of connected peers
 func (t *LocalTransport) Connect(tr Transport) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
@@ -34,6 +38,7 @@ func (t *LocalTransport) Connect(tr Transport) error {
 	return nil
 }
 
+// SendMessage sends a message to a peer by address
 func (t *LocalTransport) SendMessage(to NetAddr, payload []byte) error {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
@@ -51,6 +56,18 @@ func (t *LocalTransport) SendMessage(to NetAddr, payload []byte) error {
 	return nil
 }
 
+// Broadcast sends a message to all connected peers
+func (t *LocalTransport) Broadcast(payload []byte) error {
+	for _, peer := range t.peers {
+		if err := t.SendMessage(peer.addr, payload); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Returns the address of the local transport
 func (t *LocalTransport) Addr() NetAddr {
 	return t.addr
 }
