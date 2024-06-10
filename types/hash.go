@@ -42,7 +42,7 @@ func HashFromBytes(b []byte) Hash {
 
 func RandomBytes(size int) []byte {
 	token := make([]byte, size)
-	rand.Read(token)
+	_, _ = rand.Read(token)
 	return token
 }
 
