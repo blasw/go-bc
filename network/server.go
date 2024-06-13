@@ -2,11 +2,13 @@ package network
 
 import (
 	"bytes"
-	"fmt"
 	"go-blockchain/core"
 	"go-blockchain/crypto"
+	"go-blockchain/types"
+	"os"
 	"time"
 
+	"github.com/go-kit/log"
 	"github.com/sirupsen/logrus"
 )
 
@@ -15,6 +17,8 @@ const (
 )
 
 type ServerOpts struct {
+	ID            string
+	Logger        log.Logger
 	RPCDecodeFunc RPCDecodeFunc
 	RPCProccesor  RPCProccesor
 	Transports    []Transport
@@ -24,6 +28,7 @@ type ServerOpts struct {
 
 type Server struct {
 	ServerOpts
+	chain       *core.Blockchain
 	blockTime   time.Duration
 	memPool     *TxPool
 	isValidator bool
@@ -31,7 +36,7 @@ type Server struct {
 	quitCh      chan struct{}
 }
 
-func NewServer(opts ServerOpts) *Server {
+func NewServer(opts ServerOpts) (*Server, error) {
 	if opts.BlockTime == 0 {
 		opts.BlockTime = DefaultBlockTime
 	}
@@ -40,8 +45,19 @@ func NewServer(opts ServerOpts) *Server {
 		opts.RPCDecodeFunc = DefaultRPCDecodeFunc
 	}
 
+	if opts.Logger == nil {
+		opts.Logger = log.NewLogfmtLogger(os.Stderr)
+		opts.Logger = log.With(opts.Logger, "ID", opts.ID)
+	}
+
+	chain, err := core.NewBlockChain(genesisBlock())
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Server{
 		ServerOpts:  opts,
+		chain:       chain,
 		blockTime:   opts.BlockTime,
 		memPool:     NewTxPool(),
 		isValidator: opts.PrivateKey != nil,
@@ -54,12 +70,15 @@ func NewServer(opts ServerOpts) *Server {
 		s.RPCProccesor = s
 	}
 
-	return s
+	if s.isValidator {
+		go s.validatorLoop()
+	}
+
+	return s, nil
 }
 
 func (s *Server) Start() {
 	s.initTransports()
-	ticker := time.NewTicker(s.blockTime)
 
 free:
 	for {
@@ -67,7 +86,7 @@ free:
 		case rpc := <-s.rpcCh:
 			msg, err := s.RPCDecodeFunc(rpc)
 			if err != nil {
-				logrus.Error(err)
+				_ = s.Logger.Log("err", err)
 			}
 
 			if err := s.RPCProccesor.ProccessMessage(msg); err != nil {
@@ -77,14 +96,21 @@ free:
 		case <-s.quitCh:
 			break free
 
-		case <-ticker.C:
-			if s.isValidator {
-				_ = s.createNewBlock()
-			}
 		}
 	}
 
-	fmt.Println("Server shutdown")
+	_ = s.Logger.Log("msg", "Server shutdown")
+}
+
+func (s *Server) validatorLoop() {
+	_ = s.Logger.Log("msg", "Starting validator loop")
+
+	ticker := time.NewTicker(s.blockTime)
+
+	for {
+		<-ticker.C
+		_ = s.createNewBlock()
+	}
 }
 
 func (s *Server) ProccessMessage(msg *DecodedMessage) error {
@@ -110,10 +136,6 @@ func (s *Server) proccessTransaction(tx *core.Transaction) error {
 	hash := tx.Hash(core.TxHasher{})
 
 	if s.memPool.Has(hash) {
-		logrus.WithFields(logrus.Fields{
-			"hash":   hash,
-			"length": len(s.memPool.Transactions()),
-		}).Info("provided tx is already in mempool, skipping")
 		return nil
 	}
 
@@ -123,9 +145,11 @@ func (s *Server) proccessTransaction(tx *core.Transaction) error {
 
 	tx.SetFirstSeen(time.Now().UnixNano())
 
-	logrus.WithFields(logrus.Fields{
-		"hash": hash,
-	}).Info("adding new tx to mempool")
+	_ = s.Logger.Log(
+		"msg", "adding new tx to mempool",
+		"hash", hash,
+		"mempool_length", s.memPool.Len(),
+	)
 
 	// TODO: broadcast new tx to peers
 	go s.broadcastTx(tx)
@@ -144,11 +168,6 @@ func (s *Server) broadcastTx(tx *core.Transaction) error {
 	return s.broadcast(msg.Bytes())
 }
 
-func (s *Server) createNewBlock() error {
-	fmt.Println("creating a new block...")
-	return nil
-}
-
 func (s *Server) initTransports() {
 	for _, tr := range s.Transports {
 		go func(tr Transport) {
@@ -157,4 +176,46 @@ func (s *Server) initTransports() {
 			}
 		}(tr)
 	}
+}
+
+func (s *Server) createNewBlock() error {
+	_ = s.Logger.Log("msg", "creating new block", "cur_height", s.chain.Height())
+	curHeader, err := s.chain.GetHeader(s.chain.Height())
+	if err != nil {
+		return err
+	}
+
+	//TODO: delete after testing
+	txx := []core.Transaction{}
+	for _, tx := range s.memPool.Transactions() {
+		txx = append(txx, *tx)
+	}
+
+	block, err := core.NewBlockFromPrevHeader(curHeader, txx)
+	if err != nil {
+		return err
+	}
+
+	if block.Sign(*s.PrivateKey) != nil {
+		return err
+	}
+
+	if err := s.chain.AddBlock(block); err != nil {
+		return err
+	}
+
+	s.memPool.Flush()
+
+	return nil
+}
+
+func genesisBlock() *core.Block {
+	header := core.Header{
+		Version:   1,
+		DataHash:  types.Hash{},
+		Timestamp: time.Now().UnixNano(),
+		Height:    0,
+	}
+
+	return core.NewBlock(&header, nil)
 }

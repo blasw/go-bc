@@ -10,6 +10,8 @@ import (
 )
 
 func randomBlock(t *testing.T, height uint32, prevBlockHash types.Hash) *Block {
+	privKey := crypto.GeneratePrivateKey()
+	tx := randomTxWithSignature(t)
 	header := &Header{
 		Version:       1,
 		PrevBlockHash: prevBlockHash,
@@ -17,19 +19,12 @@ func randomBlock(t *testing.T, height uint32, prevBlockHash types.Hash) *Block {
 		Timestamp:     time.Now().UnixNano(),
 	}
 
-	// tx := Transaction{
-	// 	Data: []byte("foo"),
-	// }
-
-	tx := randomTxWithSignature(t)
-
-	return NewBlock(header, []Transaction{*tx})
-}
-
-func randomBlockWithSignature(t *testing.T, height uint32, prevBlockHash types.Hash) *Block {
-	privKey := crypto.GeneratePrivateKey()
-	b := randomBlock(t, height, prevBlockHash)
+	b := NewBlock(header, []Transaction{tx})
+	dataHash, err := CalculateDataHash(b.Transactions)
+	assert.Nil(t, err)
+	b.Header.DataHash = dataHash
 	assert.Nil(t, b.Sign(privKey))
+
 	return b
 }
 

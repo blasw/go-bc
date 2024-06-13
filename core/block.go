@@ -2,8 +2,10 @@ package core
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/gob"
 	"fmt"
+	"time"
 
 	"go-blockchain/crypto"
 	"go-blockchain/types"
@@ -20,7 +22,7 @@ type Header struct {
 func (h *Header) Bytes() []byte {
 	buf := &bytes.Buffer{}
 	enc := gob.NewEncoder(buf)
-	enc.Encode(h)
+	_ = enc.Encode(h)
 	return buf.Bytes()
 }
 
@@ -39,6 +41,24 @@ func NewBlock(h *Header, txx []Transaction) *Block {
 		Transactions: txx,
 	}
 }
+
+func NewBlockFromPrevHeader(prevHeader *Header, txx []Transaction) (*Block, error) {
+	dataHash, err := CalculateDataHash(txx)
+	if err != nil {
+		return nil, err
+	}
+
+	header := &Header{
+		Version:       1,
+		DataHash:      dataHash,
+		PrevBlockHash: BlockHasher{}.Hash(prevHeader),
+		Timestamp:     time.Now().UnixNano(),
+		Height:        prevHeader.Height + 1,
+	}
+
+	return NewBlock(header, txx), nil
+}
+
 func (b *Block) AddTransaction(tx *Transaction) {
 	b.Transactions = append(b.Transactions, *tx)
 }
@@ -63,6 +83,16 @@ func (b *Block) Verify() error {
 			return err
 		}
 	}
+
+	dataHash, err := CalculateDataHash(b.Transactions)
+	if err != nil {
+		return err
+	}
+
+	if dataHash != b.DataHash {
+		return fmt.Errorf("data hash mismatch: %x, %x", dataHash, b.DataHash)
+	}
+
 	return nil
 }
 
@@ -79,4 +109,17 @@ func (b *Block) Hash(hasher Hasher[*Header]) types.Hash {
 		b.hash = hasher.Hash(b.Header)
 	}
 	return b.hash
+}
+
+func CalculateDataHash(txx []Transaction) (hash types.Hash, err error) {
+	buf := &bytes.Buffer{}
+
+	for _, tx := range txx {
+		if err = tx.Encode(NewGobTxEncoder(buf)); err != nil {
+			return
+		}
+	}
+
+	hash = sha256.Sum256(buf.Bytes())
+	return
 }
